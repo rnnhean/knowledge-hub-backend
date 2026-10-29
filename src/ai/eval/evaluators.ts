@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { ChatOpenAI } from '@langchain/openai';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
@@ -312,6 +313,7 @@ type JudgeResult<T> =
 
 let judgeLlm: ChatOpenAI | undefined;
 let judgeLlmReady = false;
+const judgeLogger = new Logger('EvalJudge');
 
 function getJudgeLlm(): ChatOpenAI | undefined {
   if (judgeLlmReady) return judgeLlm;
@@ -356,10 +358,9 @@ async function invokeJudge<T extends z.ZodType>(
     ]);
     return { ok: true, data: data as z.infer<T> };
   } catch (error) {
-    return {
-      ok: false,
-      error: `judge 失败：${error instanceof Error ? error.message : error}`,
-    };
+    const message = `judge 失败：${error instanceof Error ? error.message : error}`;
+    judgeLogger.warn(message);
+    return { ok: false, error: message };
   }
 }
 

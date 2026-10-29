@@ -23,7 +23,51 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+knowledge-hub 后端：NestJS 11 + TypeScript，提供文档生命周期管理、RBAC 权限、RAG 智能问答（混合检索 + Agent）与知识图谱，共 14 个 Controller / 100 个接口。
+
+## 架构
+
+```text
+┌─ 客户端 ───────────────────────────────────────────────┐
+│  React 19 前端  :5173      /api 代理 → 127.0.0.1:3000  │
+└───────────────────────────┬────────────────────────────┘
+                            │ HTTP / SSE
+┌─ 接入层 · NestJS 11 ──────▼────────────────────────────┐
+│  全局 Guard：JWT → Roles → Permissions（9 个权限码）    │
+│  document      CRUD / 状态机 / 审核 / 分享 / 版本       │
+│  ai            /ai/chat · /ai/chat/stream               │
+│  graph / search       auth / user / team / notification │
+└───────────────────────────┬────────────────────────────┘
+                            ▼
+┌─ 业务与 AI ────────────────────────────────────────────┐
+│  Agent 编排   createAgent + 4 工具                      │
+│               retrieve / rewrite / graph / web          │
+│  混合检索     BM25(ik) + kNN → RRF(k=60) → rerank      │
+│               → minScore 0.4 → top5                     │
+│  三层记忆     Redis 热窗口 → PG 会话 → Mem0             │
+│  离线评测     9 条金标 / 5 个 suite / 9 个评估器        │
+└───────────────────────────┬────────────────────────────┘
+                            │ 发布 / 归档事件
+┌─ 异步管线 · RabbitMQ ─────▼────────────────────────────┐
+│  3 交换机 / 3 队列                                      │
+│  rag.reindex · search.index · kg.graph                  │
+│  → PipelineOrchestrator：切分 512/64 → embedding → 索引 │
+└───────────────────────────┬────────────────────────────┘
+                            ▼
+┌─ 存储层 ───────────────────────────────────────────────┐
+│  PostgreSQL  19 表，元数据 / 权限                       │
+│  MongoDB     document_content 正文                      │
+│  ES          kh_chunk(dense_vector 1024) / kh_document  │
+│  Neo4j       Document → Chunk → Entity                  │
+│  Redis       记忆热窗口 / 验证码                        │
+│  RustFS      S3 兼容，文件与图片                        │
+└────────────────────────────────────────────────────────┘
+
+外部依赖：DashScope（text-embedding-v3 · qwen3-rerank · qwen-plus）
+          Bocha 联网搜索 · MinerU 文档解析 · Langfuse 可观测
+```
+
+**说明**：向量存在 Elasticsearch `kh_chunk.embedding`（dense_vector，1024 维 cosine），PostgreSQL 不承担向量检索。
 
 ## Project setup
 

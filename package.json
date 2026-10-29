@@ -18,7 +18,7 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "eval:rag": "ts-node -O '{\"module\":\"commonjs\",\"moduleResolution\":\"node\"}' -r tsconfig-paths/register src/ai/eval/run-experiment.ts"
+    "eval:rag": "ts-node -r tsconfig-paths/register src/ai/eval/run-experiment.ts"
   },
   "dependencies": {
     "@ai-sdk/langchain": "^3.0.93",
