@@ -194,6 +194,99 @@ export async function precisionAt5({
 }
 
 /**
+ * 检索层：Recall@K —— 金标文档里有多少进了 Top-K。
+ *
+ * 与 precision 的分工：precision 回答「召回的里面有多少是对的」，
+ * recall 回答「该找到的找到了多少」。RAG 里**漏召回比误召回更致命**：
+ * 误召回还能被 rerank / 生成层过滤，漏召回直接导致答非所问。
+ *
+ * 分母是金标条数；金标为空（库里本来就没有对应制度）时返回 null 跳过，
+ * 不参与均值——否则「本来就没有」会被算成召回失败。
+ */
+export function recallAtK(k: number) {
+  return async function recall({
+    output,
+    expectedOutput,
+  }: EvalArgs): Promise<EvalScore> {
+    const gold = expectedOutput?.relevantDocTitles;
+    if (!gold?.length) {
+      return { name: `recall_at_${k}`, value: null, comment: '无相关文档金标' };
+    }
+    const top = output.rawHits.slice(0, k);
+    const found = gold.filter((g) =>
+      top.some((h) => matchesGold(h.documentTitle, g)),
+    );
+    return {
+      name: `recall_at_${k}`,
+      value: found.length / gold.length,
+      comment: `召回 ${found.length}/${gold.length}`,
+    };
+  };
+}
+
+/**
+ * 检索层：MRR = 1 / 首个命中位置（单题值，跨题取均值才是 Mean）。
+ *
+ * 为什么 hit@5 不够：它只说「有没有」，不区分「排第 1」和「排第 5」。
+ * 排第 1 时下游几乎不被干扰，排第 5 时要靠 rerank 和生成层硬扛。
+ */
+export async function mrr({
+  output,
+  expectedOutput,
+}: EvalArgs): Promise<EvalScore> {
+  const gold = expectedOutput?.relevantDocTitles;
+  if (!gold?.length) {
+    return { name: 'mrr', value: null, comment: '无相关文档金标' };
+  }
+  const hits = output.rawHits;
+  for (let i = 0; i < hits.length; i++) {
+    if (gold.some((g) => matchesGold(hits[i].documentTitle, g))) {
+      return {
+        name: 'mrr',
+        value: Number((1 / (i + 1)).toFixed(4)),
+        comment: `首个命中在第 ${i + 1} 位`,
+      };
+    }
+  }
+  return { name: 'mrr', value: 0, comment: '未命中' };
+}
+
+/**
+ * 检索层：NDCG@K。相比 MRR 多考虑了「后面的金标有没有也捞上来」。
+ *
+ * 用二值相关性（命中=1/未命中=0），因为金标只标了「相关文档标题」，
+ * 没有分级相关性。DCG = Σ rel_i / log2(i+2)，IDCG 取理想排序。
+ * 用 log2(i+2) 而非 log2(i+1)：i 从 0 起，第 1 位不折损。
+ */
+export function ndcgAtK(k: number) {
+  return async function ndcg({
+    output,
+    expectedOutput,
+  }: EvalArgs): Promise<EvalScore> {
+    const name = `ndcg_at_${k}`;
+    const gold = expectedOutput?.relevantDocTitles;
+    if (!gold?.length) {
+      return { name, value: null, comment: '无相关文档金标' };
+    }
+    const top = output.rawHits.slice(0, k);
+    const rels = top.map((h) =>
+      gold.some((g) => matchesGold(h.documentTitle, g)) ? 1 : 0,
+    );
+    const dcg = rels.reduce((s, r, i) => s + r / Math.log2(i + 2), 0);
+    const ideal = Array.from(
+      { length: Math.min(gold.length, k) },
+      () => 1,
+    ).reduce((s, r, i) => s + r / Math.log2(i + 2), 0);
+    const value = ideal > 0 ? dcg / ideal : 0;
+    return {
+      name,
+      value: Number(value.toFixed(4)),
+      comment: `DCG ${dcg.toFixed(3)} / IDCG ${ideal.toFixed(3)}`,
+    };
+  };
+}
+
+/**
  * 空金标（库空/沾边题）：grader 仍把资料标切题并喂给模型，算误命中。
  * 只看 gradedHits，不看 rawHits——检索到差旅但评估为不切题是正确行为。
  */
@@ -390,6 +483,9 @@ export const AGENT_EVALUATORS = [
   refusalQuality,
   hitAt5,
   precisionAt5,
+  recallAtK(5),
+  mrr,
+  ndcgAtK(5),
   falseHit,
   completeness,
   groundedness,
