@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { Logger } from 'nestjs-pino';
 import { ValidationPipe } from '@nestjs/common';
 import type { Request, Response, NextFunction } from 'express';
 import { AppModule } from './app.module';
@@ -50,7 +51,11 @@ function metricsMiddleware(req: Request, res: Response, next: NextFunction): voi
 
 async function bootstrap() {
   startLangfuseTracing();
-  const app = await NestFactory.create(AppModule);
+  // bufferLogs：启动阶段（模块初始化、连接数据库）的日志先缓存，
+  // 等 useLogger 挂上 pino 之后再一次性输出——否则启动日志会是
+  // 前半段文本、后半段 JSON，混在一起。
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  app.useLogger(app.get(Logger));
   app.use(metricsMiddleware);
   app.enableShutdownHooks();
   process.once('beforeExit', () => {

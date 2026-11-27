@@ -380,3 +380,67 @@ Python 包装层把 mem0 OSS 暴露成 HTTP 服务（`mem0-server/main.py`），
 LangMem 和 LangChain 版本绑得紧，升级 LangChain 时容易一起被迫动刀。
 Zep 更重（自带图数据库），对这个体量是过度设计。
 
+
+---
+
+### Q24：日志为什么从 Nest 内置 logger 换成 pino？
+
+**关键词**：**结构化**、**请求级日志免费得**
+
+Nest 内置 logger 输出的是给人看的文本：
+```
+[Nest] 38916 - 2026/11/27 16:29:37 LOG [ChatLongMemoryService] Mem0 分类：...
+```
+这种格式进 ES 之后：没法按字段过滤、没法做「只看某次请求的全部日志」、
+时间戳还得正则提取。
+
+换成 `nestjs-pino` 后：
+```json
+{"ts":"2026-11-27T17:19:28.211Z","level":30,"service":"knowledge-hub",
+ "req":{"method":"GET","url":"/documents"},"res":{"statusCode":401},"responseTime":3}
+```
+
+**白得的两个能力**：
+- `trace_id` 复用 `x-trace-id` 头（`genReqId`），能把一次请求在网关和本服务之间的日志串起来
+- `responseTime` 自动记录，不用自己写 interceptor
+
+---
+
+### Q25：pino 接入踩过什么坑？
+
+**关键词**：**transport 与 formatters 互斥**、**level 数字**
+
+**坑一**：想让 `level` 输出字符串而不是数字，加了 `formatters.level`，
+服务**直接起不来**：
+```
+Error: option.transport.targets do not allow custom level formatters
+```
+原因是同时用了 `transport`（双写 stdout + 文件）——pino 硬限制这两者不能共存。
+修法：去掉 formatters，把 level 转换放到 Filebeat 侧。
+
+**坑二**：`genReqId` 返回 `undefined` 时类型不通过（要求 `ReqId` 必有值）。
+没有透传 trace id 时得自己生成 `randomUUID()`，否则 `reqId` 字段时有时无，
+ES 里按它聚合会对不齐。
+
+**坑三**：`autoLogging.ignore` 的回调参数类型是 `{headers}` 而不是 `{url}`，
+直接写 `req.url` 编译不过，要放宽类型或改用别的方式判断。
+
+---
+
+### Q26：日志怎么和追踪体系配合？
+
+**关键词**：**trace_id 贯穿**、**各司其职**
+
+三个系统的分工：
+
+| 系统 | 存什么 | 回答什么问题 |
+|---|---|---|
+| **Langfuse** | LLM 调用的输入输出、token、耗时 | 这次答错是检索错还是生成错 |
+| **ES + Kibana** | 每次请求的访问日志、业务日志 | 上周三那批 500 的 URI 是什么 |
+| **Sentry** | 前端异常、堆栈 | 这个报错从哪个版本开始 |
+
+**串起来靠 trace_id**：前端发起请求时生成 → 网关透传并写响应头 →
+kh 从 `x-trace-id` 头取到塞进日志 → 在 Kibana 里按 trace_id 一搜，
+一次请求在网关和文档服务里的所有日志都在。
+
+**不重复采集**：「每次都有的」进 ES（访问日志），「出错才有的」进 Sentry（异常）。

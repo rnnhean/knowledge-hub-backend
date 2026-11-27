@@ -14,3 +14,4 @@ mem0-server/.venv/
 mem0-server/data/
 mem0-server/mem0.log
 mem0-server/.env
+logs/
