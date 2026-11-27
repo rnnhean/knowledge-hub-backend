@@ -83,6 +83,31 @@ services:
         condition: service_healthy
 
   # Redis — 密码重置验证码等
+  mem0:
+    # 自托管 mem0：官方镜像只有 arm64，这里用本地构建的 amd64 版本。
+    # 替代原来的云服务（api.mem0.ai），避免免费额度耗尽导致写入被锁。
+    build:
+      context: ./mem0-server
+    image: kh-mem0:local
+    container_name: knowledge_hub_mem0
+    restart: unless-stopped
+    env_file:
+      - ./mem0-server/.env
+    environment:
+      # 容器内访问宿主的模型服务需要走公网地址，这里直接用 dashscope 的 URL；
+      # 向量数据落在挂载卷里，重启不丢。
+      MEM0_QDRANT_PATH: /app/data/qdrant
+    ports:
+      - "8888:8888"
+    volumes:
+      - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mem0:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8888/health', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   redis:
     image: redis:7-alpine
     container_name: knowledge_hub_redis
@@ -119,7 +144,9 @@ services:
     restart: unless-stopped
     ports:
       - "5672:5672"   # AMQP
-      - "15672:15672" # Management UI
+      # 管理界面。宿主机 15672 已被 loyalty-console 的 mc-rabbitmq 占用
+      # （两个项目同时在本机跑），这里错开到 15673，容器内仍是 15672。
+      - "15673:15672" # Management UI
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest

@@ -3,6 +3,7 @@ import { PipelineModule } from '../pipeline/pipeline.module';
 import { AiChatService } from './ai-chat.service';
 import { AiStreamService } from './ai-stream.service';
 import { AiController } from './ai.controller';
+import { HealthController } from './health.controller';
 import { ChatSessionService } from './chat-session.service';
 import { ChatShortMemoryService } from './chat-short-memory.service';
 import { ChatLongMemoryService } from './chat-long-memory.service';
@@ -13,7 +14,7 @@ import { WebSearchService } from './web-search.service';
 
 @Module({
   imports: [PipelineModule],
-  controllers: [AiController],
+  controllers: [AiController, HealthController],
   providers: [
     AiChatService,
     AiStreamService,

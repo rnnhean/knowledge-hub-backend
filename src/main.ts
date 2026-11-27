@@ -1,11 +1,57 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import type { Request, Response, NextFunction } from 'express';
 import { AppModule } from './app.module';
 import { startLangfuseTracing, shutdownLangfuseTracing } from './observability/langfuse';
+import { httpDuration, httpRequestsTotal, refreshInFlight } from './observability/metrics';
+
+/** 在途请求数。放在模块顶层，避免中间件里出现 TDZ。 */
+let inFlight = 0;
+
+/**
+ * HTTP 指标中间件。
+ *
+ * route 优先取 express 的路由模板（`/documents/:id`），而不是真实 path。
+ * 否则每个 id 都是一条新的时间序列，指标基数会爆炸——Prometheus 最怕这个。
+ * 路由还没匹配上时（比如 404）退回路径第一段。
+ */
+function metricsMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (req.path === '/metrics') {
+    next();
+    return;
+  }
+  const startedAt = process.hrtime.bigint();
+  inFlight += 1;
+  refreshInFlight.set(inFlight);
+
+  res.on('finish', () => {
+    inFlight = Math.max(0, inFlight - 1);
+    refreshInFlight.set(inFlight);
+
+    const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    // 有路由模板就用模板（/documents/:id）；匹配不上（404）时取前两段路径，
+    // 而不是第一段——否则所有 404 都会挤在 route="/api" 上，指标失去分辨力。
+    let route = (req.route?.path as string) || req.baseUrl || '';
+    if (!route || route === '/') {
+      const segs = req.path.split('/').filter(Boolean).slice(0, 2);
+      route = segs.length ? `/${segs.join('/')}` : '/';
+    } else if (!route.startsWith('/')) {
+      route = `/${route}`;
+    }
+    httpRequestsTotal.inc({
+      method: req.method,
+      route,
+      status: String(res.statusCode),
+    });
+    httpDuration.observe({ route }, seconds);
+  });
+  next();
+}
 
 async function bootstrap() {
   startLangfuseTracing();
   const app = await NestFactory.create(AppModule);
+  app.use(metricsMiddleware);
   app.enableShutdownHooks();
   process.once('beforeExit', () => {
     shutdownLangfuseTracing();

@@ -46,6 +46,8 @@ import type { ChunkHit } from '../pipeline/types/pipeline.types';
 import type { ChatEvalHit, ChatEvalSnapshot } from './eval/eval.types';
 import { CallbackHandler } from '@langfuse/langchain';
 import { isLangfuseEnabled } from '../observability/langfuse';
+import { LlmMetricsHandler } from '../observability/llm-metrics';
+import { retrievalTotal } from '../observability/metrics';
 
 /** 引用摘录截断长度（字符） */
 const EXCERPT_LEN = 200;
@@ -132,7 +134,10 @@ export class AiStreamService {
       timeout: Number(config.get('AI_CHAT_TIMEOUT_MS', 60000)),
       maxRetries: 0,
       useResponsesApi: false,
-      streamUsage: false,
+      // 必须开：流式响应默认不回 usage，关着的话 handleLLMEnd 拿不到 token 数，
+      // Prometheus 里 kh_llm_tokens_total 会永远是空（实测踩过：
+      // kh_llm_calls_total 有 6，tokens 一条都没有）。
+      streamUsage: true,
       configuration: { baseURL },
       modelKwargs: {
         ...(enableThinking ? { enable_thinking: true } : {}),
@@ -199,6 +204,17 @@ export class AiStreamService {
             lastRetrieve = result;
             trace?.retrieves.push(result);
             writer.write({ type: 'data-eval', data: result.eval });
+            // 检索质量指标：ok / insufficient / error 三种结果分开计数。
+            // 这是 RAG 最该盯的数——insufficient 占比升高，说明要么语料缺，
+            // 要么切分/向量化退化了，光看接口成功率发现不了。
+            retrievalTotal.inc({
+              verdict:
+                result.eval.reason === 'error'
+                  ? 'error'
+                  : result.eval.ok
+                    ? 'ok'
+                    : 'insufficient',
+            });
             if (result.eval.reason === 'error') {
               logger.warn(`RAG 检索失败：${result.eval.text}`);
               return {
@@ -434,6 +450,7 @@ export class AiStreamService {
           tags: ['agentic-rag', 'eval', plan.intent],
         })
       : undefined;
+    const callbacks = [new LlmMetricsHandler(), ...(langfuseHandler ? [langfuseHandler] : [])];
     const result = await agent.invoke(
       {
         messages: [
@@ -441,7 +458,7 @@ export class AiStreamService {
           new HumanMessage(trimmed),
         ],
       },
-      langfuseHandler ? { callbacks: [langfuseHandler] } : undefined,
+      { callbacks },
     );
     const answer =
       lastAssistantText(result.messages as BaseMessage[]) || '未能生成回答。';
@@ -560,7 +577,7 @@ export class AiStreamService {
           // messages：模型 token/思考；tools：retrieve / web_search，给适配包转成 tool-* 事件
           {
             streamMode: ['messages', 'tools'],
-            ...(langfuseHandler ? { callbacks: [langfuseHandler] } : {}),
+            callbacks: [new LlmMetricsHandler(), ...(langfuseHandler ? [langfuseHandler] : [])],
           },
         );
 

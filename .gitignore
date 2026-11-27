@@ -3,3 +3,14 @@ node_modules/
 dist/
 volumes/
 .DS_Store
+
+# 端到端验证产生的截图：本地留证用，不进仓库（体积大且每次跑都会变）
+docs/shots/
+# 后端运行日志
+.kh-backend.log
+
+# mem0 自托管服务的运行产物：venv / 向量库数据 / 日志 / 本地配置
+mem0-server/.venv/
+mem0-server/data/
+mem0-server/mem0.log
+mem0-server/.env
